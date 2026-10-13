@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import ai
-from .config import HTTPS_ONLY, SECRET_KEY, STATIC_DIR, TIMEZONE, USERS
+from .config import DEMO_DAILY_AI_LIMIT, DEMO_USERS, HTTPS_ONLY, SECRET_KEY, STATIC_DIR, TIMEZONE, USERS
 from .db import compute_targets, get_db, init_db, nutrients_for, search_foods
 
 app = FastAPI(title="Diet Scan", docs_url=None, redoc_url=None, openapi_url=None)
@@ -61,7 +61,26 @@ def current_user(request: Request) -> dict:
 
 def user_payload(user: dict) -> dict:
     age = now().year - user["birth_year"] if user.get("birth_year") else None
-    return {"user": user, "age": age, "targets": compute_targets(user, age)}
+    return {"user": user, "age": age, "targets": compute_targets(user, age), "is_demo": is_demo(user)}
+
+
+def is_demo(user: dict) -> bool:
+    return user["username"] in DEMO_USERS
+
+
+AI_USAGE: dict[tuple[str, str], int] = {}
+
+
+def use_ai_quota(user: dict):
+    """Batasi pemakaian AI akun demo per hari (akun asli tidak dibatasi)."""
+    if not is_demo(user):
+        return
+    key = (user["username"], today())
+    if AI_USAGE.get(key, 0) >= DEMO_DAILY_AI_LIMIT:
+        raise HTTPException(429, f"Batas pemakaian AI akun demo hari ini ({DEMO_DAILY_AI_LIMIT}x) sudah habis. Coba lagi besok ya!")
+    AI_USAGE[key] = AI_USAGE.get(key, 0) + 1
+    for k in [k for k in AI_USAGE if k[1] != today()]:
+        AI_USAGE.pop(k, None)
 
 
 def day_totals(db, user_id: int, d: str) -> dict:
@@ -97,6 +116,13 @@ def login(body: LoginIn, request: Request):
         raise HTTPException(401, "Username atau PIN salah")
     FAILED_LOGINS.pop(ip, None)
     request.session["user"] = username
+    if username in DEMO_USERS:
+        # Semua pengunjung memakai akun demo yang sama: bersihkan catatan hari-hari sebelumnya
+        with get_db() as db:
+            row = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            if row:
+                db.execute("DELETE FROM logs WHERE user_id = ? AND date < ?", (row["id"], today()))
+                db.execute("DELETE FROM weights WHERE user_id = ? AND date < ?", (row["id"], (now().date() - timedelta(days=30)).isoformat()))
     return {"ok": True}
 
 
@@ -145,6 +171,7 @@ def update_me(body: ProfileIn, user=Depends(current_user)):
 
 @app.post("/api/scan")
 async def scan(image: UploadFile = File(...), hint: str = Form(""), user=Depends(current_user)):
+    use_ai_quota(user)
     raw = await image.read()
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(413, "Foto terlalu besar (maks 8 MB)")
@@ -272,6 +299,9 @@ def couple(user=Depends(current_user)):
     with get_db() as db:
         for row in db.execute("SELECT * FROM users").fetchall():
             u = dict(row)
+            # Akun demo hanya melihat dirinya sendiri, dan tidak tampil di akun asli
+            if (is_demo(user) and u["id"] != user["id"]) or (not is_demo(user) and is_demo(u)):
+                continue
             out.append({
                 "name": u["display_name"] or u["username"],
                 "me": u["id"] == user["id"],
@@ -334,6 +364,7 @@ class ChatIn(BaseModel):
 
 @app.post("/api/chat")
 async def chat(body: ChatIn, user=Depends(current_user)):
+    use_ai_quota(user)
     p = user_payload(user)
     d = today()
     with get_db() as db:

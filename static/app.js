@@ -127,6 +127,7 @@ async function loadDay() {
   const t = data.targets || {};
   $("#ring").innerHTML = ringSvg(data.totals.kcal, t.kcal);
   $("#hero-stats").innerHTML = heroStats(data.totals.kcal, t.kcal);
+  $("#demo-pill").classList.toggle("hidden", !data.is_demo);
   $("#macros").innerHTML =
     macroCard("Protein", data.totals.protein, t.protein, "var(--protein)") +
     macroCard("Karbo", data.totals.carb, t.carb, "var(--carb)") +
@@ -507,12 +508,17 @@ $("#weight-form").addEventListener("submit", async (e) => {
 });
 
 // ---------- Coach ----------
+function scrollChat(behavior = "auto") {
+  // Gulir ke paling bawah halaman (kolom ketik menempel di bawah, jadi jangan pakai scrollIntoView)
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
+}
+
 function addBubble(role, text) {
   const div = document.createElement("div");
   div.className = "bubble " + role;
   div.textContent = text;
   $("#chat-log").appendChild(div);
-  div.scrollIntoView({ behavior: "smooth" });
+  scrollChat("smooth");
   return div;
 }
 
@@ -547,12 +553,13 @@ $("#chat-form").addEventListener("submit", async (e) => {
       if (reply.trim()) {
         pending.classList.remove("typing");
         pending.textContent = reply;
-        pending.scrollIntoView({ block: "end" });
+        scrollChat();
       }
     }
     reply = reply.trim();
     if (!reply) throw new Error("Coach tidak membalas, coba lagi.");
     pending.textContent = reply;
+    scrollChat();
     state.chat.push({ role: "assistant", content: reply });
   } catch (err) {
     pending.classList.remove("typing");

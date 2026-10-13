@@ -34,3 +34,7 @@ def parse_users(raw: str) -> dict[str, str]:
 
 
 USERS = parse_users(os.getenv("USERS", ""))
+
+# Akun demo (mis. untuk portofolio): dipisah dari akun asli, kuota AI harian, data direset tiap hari
+DEMO_USERS = {u.strip().lower() for u in os.getenv("DEMO_USERS", "demo").split(",") if u.strip()}
+DEMO_DAILY_AI_LIMIT = int(os.getenv("DEMO_DAILY_AI_LIMIT", "30"))
