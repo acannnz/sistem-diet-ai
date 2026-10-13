@@ -194,11 +194,27 @@ async def scan(image: UploadFile = File(...), hint: str = Form(""), user=Depends
             if item["per100g"]["kcal"] < 5:
                 item["candidates"] = []
 
-    # AI memilih entri database yang paling sesuai; kalau gagal, pakai skor kemiripan
-    try:
-        picks = await ai.pick_matches(items) if any(i["candidates"] for i in items) else [None] * len(items)
-    except ai.AIError:
-        picks = [c["candidates"][0]["id"] if c["candidates"] and c["candidates"][0]["score"] >= 0.8 else None for c in items]
+    # Tentukan padanan TKPI per item. AI hanya ditanya untuk item yang ambigu (hemat ~4 detik):
+    # - tidak ada kandidat dengan skor >= 0.5  -> pakai perkiraan AI (kandidat lemah selalu ditolak)
+    # - kandidat teratas jelas unggul (>= 0.9) -> langsung dipilih, mis. "nasi" -> "Nasi"
+    picks: list[int | None] = [None] * len(items)
+    ambiguous = []
+    for i, item in enumerate(items):
+        good = [c for c in item["candidates"] if c["score"] >= 0.5]
+        if not good:
+            continue
+        if good[0]["score"] >= 0.9 and (len(good) == 1 or good[0]["score"] - good[1]["score"] >= 0.1):
+            picks[i] = good[0]["id"]
+        else:
+            ambiguous.append(i)
+    if ambiguous:
+        sub = [{**items[i], "candidates": [c for c in items[i]["candidates"] if c["score"] >= 0.5]} for i in ambiguous]
+        try:
+            chosen_ids = await ai.pick_matches(sub)
+        except ai.AIError:
+            chosen_ids = [s["candidates"][0]["id"] if s["candidates"][0]["score"] >= 0.8 else None for s in sub]
+        for i, pick in zip(ambiguous, chosen_ids):
+            picks[i] = pick
 
     for item, pick in zip(items, picks):
         cands = item.pop("candidates")
