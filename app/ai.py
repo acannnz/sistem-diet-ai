@@ -17,22 +17,39 @@ def _payload(model: str, messages: list[dict], temperature: float, reasoning: st
     return body
 
 
-async def chat_completion(model: str, messages: list[dict], temperature: float = 0.3, reasoning: str = "") -> str:
+async def chat_completion(
+    model: str, messages: list[dict], temperature: float = 0.3, reasoning: str = "", timeout: float = 50
+) -> str:
     if not AI_BASE_URL or not model:
         raise AIError("AI_BASE_URL / model belum diisi di .env")
-    async with httpx.AsyncClient(timeout=90) as client:
-        resp = await client.post(
-            f"{AI_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {AI_API_KEY}"},
-            json=_payload(model, messages, temperature, reasoning, False),
-        )
-        if resp.status_code == 400 and reasoning:
-            # Model/router tidak mengenal reasoning_effort: ulangi tanpa
-            resp = await client.post(
-                f"{AI_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {AI_API_KEY}"},
-                json=_payload(model, messages, temperature, "", False),
-            )
+    resp = None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10)) as client:
+        # Coba 2x: kalau model lambat/sibuk (timeout, 429, 5xx), percobaan kedua di combo
+        # Round Robin 9router biasanya jatuh ke model lain.
+        for attempt in range(2):
+            try:
+                resp = await client.post(
+                    f"{AI_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {AI_API_KEY}"},
+                    json=_payload(model, messages, temperature, reasoning, False),
+                )
+                if resp.status_code == 400 and reasoning:
+                    # Model/router tidak mengenal reasoning_effort: ulangi tanpa
+                    reasoning = ""
+                    resp = await client.post(
+                        f"{AI_BASE_URL}/chat/completions",
+                        headers={"Authorization": f"Bearer {AI_API_KEY}"},
+                        json=_payload(model, messages, temperature, "", False),
+                    )
+            except httpx.TimeoutException:
+                if attempt == 0:
+                    continue
+                raise AIError("AI terlalu lama merespons. Coba scan lagi sebentar ya.")
+            except httpx.HTTPError as e:
+                raise AIError(f"Tidak bisa terhubung ke server AI ({type(e).__name__}).") from e
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                continue
+            break
     if resp.status_code != 200:
         raise AIError(f"API AI error {resp.status_code}: {resp.text[:300]}")
     text = resp.text
@@ -49,7 +66,7 @@ async def stream_completion(model: str, messages: list[dict], temperature: float
     """Generator teks potongan demi potongan (streaming) dari API AI."""
     if not AI_BASE_URL or not model:
         raise AIError("AI_BASE_URL / model belum diisi di .env")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(90, read=60)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
         for attempt_reasoning in ([reasoning, ""] if reasoning else [""]):
             async with client.stream(
                 "POST",
@@ -212,7 +229,7 @@ async def pick_matches(items: list[dict]) -> list[int | None]:
         + "\n".join(lines)
         + '\n\nBalas HANYA JSON: {"picks": [id_atau_null, ...]} sesuai urutan item.'
     )
-    text = await chat_completion(AI_CHAT_MODEL, [{"role": "user", "content": prompt}], temperature=0, reasoning=AI_CHAT_REASONING)
+    text = await chat_completion(AI_CHAT_MODEL, [{"role": "user", "content": prompt}], temperature=0, reasoning=AI_CHAT_REASONING, timeout=20)
     picks = extract_json(text).get("picks", [])
     out = []
     for i, it in enumerate(items):

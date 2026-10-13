@@ -46,10 +46,12 @@ echo "==> Supervisor (proses aplikasi)"
 cat > /etc/supervisor/conf.d/sistem-diet.conf <<EOF
 [program:sistem-diet]
 directory=$APP_DIR
-command=$APP_DIR/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+command=$APP_DIR/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --timeout-graceful-shutdown 55
 user=deploy
 autostart=true
 autorestart=true
+# Beri waktu scan yang sedang berjalan untuk selesai saat restart/deploy
+stopwaitsecs=60
 stopasgroup=true
 killasgroup=true
 redirect_stderr=true

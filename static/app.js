@@ -14,6 +14,9 @@ async function api(path, opts = {}) {
   }
   const res = await fetch("api/" + path, init);
   if (res.status === 401 && path !== "login") { showLogin(); throw new Error("Belum login"); }
+  if ([502, 503, 504].includes(res.status) && !(res.headers.get("content-type") || "").includes("json")) {
+    throw new Error("Server sedang sibuk atau baru di-update. Tunggu sebentar lalu coba lagi.");
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Terjadi kesalahan (" + res.status + ")");
   return data;
