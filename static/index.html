@@ -109,24 +109,29 @@
           <div id="scan-loading" class="scan-overlay hidden"><div class="scanline"></div><span>Menganalisis makanan…</span></div>
         </div>
         <div id="scan-error" class="error"></div>
-        <p id="scan-note" class="note"></p>
-        <div id="scan-items"></div>
-        <div id="scan-actions" class="hidden">
-          <button class="btn soft full" id="btn-add-item"><svg><use href="#i-plus"/></svg>Tambah item</button>
-          <div class="save-bar">
-            <div>
-              <select id="scan-meal" aria-label="Waktu makan">
-                <option value="sarapan">🌅 Sarapan</option>
-                <option value="siang">☀️ Makan siang</option>
-                <option value="camilan">🍪 Camilan</option>
-                <option value="malam">🌙 Makan malam</option>
-              </select>
-            </div>
-            <div class="total"><small>Total</small><span id="scan-total"></span></div>
-          </div>
-          <button class="btn primary full" id="btn-save-scan">Simpan ke catatan</button>
+        <div id="scan-summary" class="scan-summary hidden"></div>
+        <details id="scan-note-wrap" class="ai-note hidden">
+          <summary>💡 Catatan dari AI</summary>
+          <p id="scan-note"></p>
+        </details>
+        <div id="scan-list-head" class="section-head hidden">
+          <h3>Hasil deteksi</h3>
+          <span class="muted small">Ketuk untuk mengubah</span>
         </div>
-        <button class="btn ghost full" id="btn-rescan"><svg><use href="#i-refresh"/></svg>Foto ulang</button>
+        <div id="scan-items" class="scan-list"></div>
+        <div id="scan-actions" class="hidden">
+          <button class="btn soft full" id="btn-add-item"><svg><use href="#i-plus"/></svg>Tambah makanan yang terlewat</button>
+          <button class="btn ghost full" id="btn-rescan"><svg><use href="#i-refresh"/></svg>Foto ulang</button>
+          <div class="save-dock" id="save-dock">
+            <select id="scan-meal" aria-label="Waktu makan">
+              <option value="sarapan">🌅 Sarapan</option>
+              <option value="siang">☀️ Siang</option>
+              <option value="camilan">🍪 Camilan</option>
+              <option value="malam">🌙 Malam</option>
+            </select>
+            <button class="btn primary" id="btn-save-scan">Simpan · <span id="scan-total">0 kkal</span></button>
+          </div>
+        </div>
       </div>
     </section>
 

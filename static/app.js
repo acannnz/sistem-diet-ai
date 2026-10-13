@@ -316,7 +316,11 @@ async function handlePhoto(file) {
   $("#scan-actions").classList.add("hidden");
   $("#scan-items").innerHTML = "";
   $("#scan-note").textContent = "";
+  $("#scan-note-wrap").classList.add("hidden");
+  $("#scan-summary").classList.add("hidden");
+  $("#scan-list-head").classList.add("hidden");
   $("#scan-error").textContent = "";
+  state.openItem = null;
   $("#scan-loading").classList.remove("hidden");
   state.scanItems = [];
   try {
@@ -336,9 +340,16 @@ async function handlePhoto(file) {
       state.photo.showCropped = true;
       setPreview(state.photo.cropped, true);
     }
-    data.items.forEach((it) => { if (it.box) it.thumb = cropImage(img, it.box, { pad: 0.02, max: 160 }); });
+    // Thumbnail per item hanya kalau posisinya terpisah jelas (lauk dalam satu piring campur
+    // menghasilkan potongan yang mirip semua, malah membingungkan)
+    const distinct = data.items.every((a, i) => data.items.every((b, j) => i === j || !a.box || !b.box || iou(a.box, b.box) < 0.35));
+    data.items.forEach((it) => {
+      it.baseGrams = it.grams;
+      if (distinct && it.box) it.thumb = cropImage(img, it.box, { pad: 0.02, max: 160 });
+    });
     $("#scan-meal").value = data.meal;
     $("#scan-note").textContent = data.note || "";
+    $("#scan-note-wrap").classList.toggle("hidden", !data.note);
     if (!data.items.length) $("#scan-error").textContent = "Tidak ada makanan yang terdeteksi. Coba foto ulang atau tambah item manual.";
     $("#scan-actions").classList.remove("hidden");
     renderScanItems();
@@ -361,62 +372,141 @@ function resetScan() {
   $("#scan-result").classList.add("hidden");
 }
 
-function per100(item) {
-  if (item.food_id) return item.matches.find((m) => m.id === item.food_id) || item.per100g;
-  return item.per100g;
+function iou(a, b) {
+  const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
+  const x2 = Math.min(a[0] + a[2], b[0] + b[2]), y2 = Math.min(a[1] + a[3], b[1] + b[3]);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  return inter / (a[2] * a[3] + b[2] * b[3] - inter || 1);
 }
 
+function per100(item) {
+  if (item.food_id) return item.matches.find((m) => m.id === item.food_id) || item.per100g || {};
+  return item.per100g || {};
+}
+
+function nutr(item) {
+  const p = per100(item), f = (item.grams || 0) / 100;
+  return { kcal: (p.kcal || 0) * f, protein: (p.protein || 0) * f, carb: (p.carb || 0) * f, fat: (p.fat || 0) * f };
+}
+
+const cap = (s) => String(s || "").replace(/^\p{L}/u, (c) => c.toUpperCase());
+
+function sourceLabel(it) {
+  const m = it.food_id && it.matches.find((x) => x.id === it.food_id);
+  return m
+    ? `<span class="src tkpi">✓ Data TKPI · ${esc(m.name)}</span>`
+    : `<span class="src ai">≈ Perkiraan AI</span>`;
+}
+
+const PORTIONS = [[0.5, "½"], [1, "1"], [1.5, "1½"], [2, "2"]];
+
 function renderScanItems() {
-  $("#scan-items").innerHTML = state.scanItems.map((it, i) => {
+  const items = state.scanItems;
+  $("#scan-list-head").classList.toggle("hidden", !items.length);
+  $("#scan-items").innerHTML = items.map((it, i) => {
+    const open = state.openItem === i;
     const opts = it.matches.map((m) =>
-      `<option value="${m.id}" ${m.id === it.food_id ? "selected" : ""}>${esc(m.name)} (${r0(m.kcal)} kkal/100g)</option>`
+      `<option value="${m.id}" ${m.id === it.food_id ? "selected" : ""}>✓ TKPI · ${esc(m.name)} (${r0(m.kcal)} kkal/100 g)</option>`
     ).join("");
-    // Selalu tampilkan pilihan perkiraan AI (termasuk 0 kkal, mis. air putih)
     const aiOpt = it.per100g
-      ? `<option value="ai" ${!it.food_id ? "selected" : ""}>Perkiraan AI: ${esc(it.name)} (${r0(it.per100g.kcal)} kkal/100g)</option>` : "";
-    return `<div class="card scan-item" data-i="${i}">
-      <div class="head">
-        ${it.thumb ? `<img class="thumb" src="${it.thumb}" alt="">` : ""}
-        <div style="flex:1;min-width:0"><b>${esc(it.name)}</b><div class="portion">${esc(it.portion || "")}</div></div>
-        <div style="display:flex;gap:6px;align-items:center"><span class="kcal" data-kcal></span><button class="remove" data-remove aria-label="Hapus">✕</button></div>
-      </div>
-      <select data-match>${opts}${aiOpt}</select>
-      <div class="qty">
-        <button class="step" type="button" data-step="0.5">½×</button>
-        <input type="number" inputmode="decimal" min="1" value="${r0(it.grams)}" data-grams aria-label="Gram">
-        <span class="unit">gram</span>
-        <button class="step" type="button" data-step="1.5">1½×</button>
-      </div>
+      ? `<option value="ai" ${!it.food_id ? "selected" : ""}>≈ Perkiraan AI (${r0(it.per100g.kcal)} kkal/100 g)</option>` : "";
+    const icon = it.thumb ? `<img class="thumb" src="${it.thumb}" alt="">` : `<span class="num">${i + 1}</span>`;
+    return `<div class="scan-row ${open ? "open" : ""}" data-i="${i}">
+      <button type="button" class="row-main" data-toggle aria-expanded="${open}">
+        ${icon}
+        <span class="info">
+          <b>${esc(cap(it.name))}</b>
+          <span class="sub" data-sub></span>
+          ${sourceLabel(it)}
+        </span>
+        <span class="kc"><b data-kcal></b><small>kkal</small></span>
+        <svg class="chev"><use href="#i-right"/></svg>
+      </button>
+      ${open ? `<div class="row-edit">
+        <div class="edit-label">Berapa banyak?</div>
+        <div class="stepper">
+          <button type="button" data-delta="-10" aria-label="Kurangi 10 gram">−</button>
+          <label><input type="number" inputmode="decimal" min="1" value="${r0(it.grams)}" data-grams aria-label="Gram"><span>gram</span></label>
+          <button type="button" data-delta="10" aria-label="Tambah 10 gram">+</button>
+        </div>
+        ${it.baseGrams ? `<div class="portion-chips">${PORTIONS.map(([f, l]) =>
+          `<button type="button" data-portion="${f}" class="${r0(it.grams) === r0(it.baseGrams * f) ? "on" : ""}">${l} porsi</button>`).join("")}</div>
+        <p class="hint">1 porsi = perkiraan AI dari foto${it.portion ? ` (${esc(it.portion)})` : ""}</p>` : ""}
+        <div class="edit-label">Data gizi yang dipakai</div>
+        <select data-match>${opts}${aiOpt}<option value="search">🔍 Cari makanan lain…</option></select>
+        <p class="hint">${it.food_id ? "Nilai gizi dari Tabel Komposisi Pangan Indonesia (TKPI)." : "Tidak ada di TKPI, jadi nilai gizinya diperkirakan AI."}</p>
+        <div class="macro-line" data-macro></div>
+        <button type="button" class="remove-link" data-remove>Hapus item ini</button>
+      </div>` : ""}
     </div>`;
   }).join("");
 
-  $$(".scan-item").forEach((el) => {
-    const it = state.scanItems[el.dataset.i];
-    $("[data-match]", el).addEventListener("change", (e) => {
-      it.food_id = e.target.value === "ai" ? null : Number(e.target.value);
-      updateScanTotals();
+  $$(".scan-row").forEach((el) => {
+    const i = Number(el.dataset.i), it = items[i];
+    $("[data-toggle]", el).addEventListener("click", () => {
+      state.openItem = state.openItem === i ? null : i;
+      renderScanItems();
     });
-    $("[data-grams]", el).addEventListener("input", (e) => { it.grams = Number(e.target.value) || 0; updateScanTotals(); });
-    $$("[data-step]", el).forEach((b) => b.addEventListener("click", () => {
-      it.grams = Math.max(1, Math.round(it.grams * Number(b.dataset.step)));
+    if (state.openItem !== i) return;
+    const setGrams = (g) => {
+      it.grams = Math.max(1, Math.round(g));
       $("[data-grams]", el).value = it.grams;
+      $$("[data-portion]", el).forEach((b) => b.classList.toggle("on", r0(it.grams) === r0(it.baseGrams * Number(b.dataset.portion))));
       updateScanTotals();
-    }));
-    $("[data-remove]", el).addEventListener("click", () => { state.scanItems.splice(el.dataset.i, 1); renderScanItems(); });
+    };
+    $("[data-grams]", el).addEventListener("input", (e) => { it.grams = Number(e.target.value) || 0; updateScanTotals(); });
+    $$("[data-delta]", el).forEach((b) => b.addEventListener("click", () => setGrams(it.grams + Number(b.dataset.delta))));
+    $$("[data-portion]", el).forEach((b) => b.addEventListener("click", () => setGrams(it.baseGrams * Number(b.dataset.portion))));
+    $("[data-match]", el).addEventListener("change", (e) => {
+      if (e.target.value === "search") {
+        openFoodDialog({
+          title: "Ganti dengan makanan lain",
+          showMeal: false,
+          onPick: (food, grams) => {
+            if (!it.matches.some((m) => m.id === food.id)) it.matches.unshift(food);
+            Object.assign(it, { food_id: food.id, name: food.name, grams, baseGrams: grams, portion: food.portion_label || "" });
+            renderScanItems();
+          },
+        });
+        renderScanItems(); // kembalikan pilihan dropdown kalau dialog dibatalkan
+        return;
+      }
+      it.food_id = e.target.value === "ai" ? null : Number(e.target.value);
+      renderScanItems();
+    });
+    $("[data-remove]", el).addEventListener("click", () => {
+      items.splice(i, 1);
+      state.openItem = null;
+      renderScanItems();
+    });
   });
   updateScanTotals();
 }
 
 function updateScanTotals() {
-  let total = 0;
-  $$(".scan-item").forEach((el) => {
-    const it = state.scanItems[el.dataset.i];
-    const kcal = ((per100(it)?.kcal || 0) * it.grams) / 100;
-    total += kcal;
-    $("[data-kcal]", el).textContent = r0(kcal) + " kkal";
+  const sum = { kcal: 0, protein: 0, carb: 0, fat: 0 };
+  $$(".scan-row").forEach((el) => {
+    const it = state.scanItems[el.dataset.i], n = nutr(it);
+    for (const k in sum) sum[k] += n[k];
+    $("[data-kcal]", el).textContent = r0(n.kcal);
+    // Deskripsi porsi dari AI hanya berlaku untuk porsi aslinya; kalau diubah, tampilkan kelipatannya
+    const factor = it.baseGrams ? PORTIONS.find(([f]) => r0(it.grams) === r0(it.baseGrams * f)) : null;
+    const portionText = factor && factor[0] !== 1 ? `${factor[1]} porsi` : factor || !it.baseGrams ? it.portion : "";
+    $("[data-sub]", el).textContent = `${r0(it.grams)} g${portionText ? " · " + portionText : ""}`;
+    const macro = $("[data-macro]", el);
+    if (macro) macro.textContent = `Protein ${r0(n.protein)} g · Karbo ${r0(n.carb)} g · Lemak ${r0(n.fat)} g`;
   });
-  $("#scan-total").textContent = r0(total) + " kkal";
-  $("#btn-save-scan").disabled = !state.scanItems.length;
+  const count = state.scanItems.length;
+  $("#scan-summary").classList.toggle("hidden", !count);
+  $("#scan-summary").innerHTML = `
+    <div class="sum-main"><small>${count} makanan terdeteksi</small><b>${r0(sum.kcal)} <span>kkal</span></b></div>
+    <div class="sum-macros">
+      <span><i style="background:var(--protein)"></i>Protein <b>${r0(sum.protein)} g</b></span>
+      <span><i style="background:var(--carb)"></i>Karbo <b>${r0(sum.carb)} g</b></span>
+      <span><i style="background:var(--fat)"></i>Lemak <b>${r0(sum.fat)} g</b></span>
+    </div>`;
+  $("#scan-total").textContent = r0(sum.kcal) + " kkal";
+  $("#btn-save-scan").disabled = !count;
 }
 
 $("#btn-add-item").addEventListener("click", () =>
@@ -424,14 +514,15 @@ $("#btn-add-item").addEventListener("click", () =>
     title: "Tambah item",
     showMeal: false,
     onPick: (food, grams) => {
-      state.scanItems.push({ name: food.name, grams, portion: "", per100g: null, matches: [food], food_id: food.id });
+      state.scanItems.push({ name: food.name, grams, baseGrams: grams, portion: food.portion_label || "", per100g: null, matches: [food], food_id: food.id });
       renderScanItems();
     },
   })
 );
 
 $("#btn-save-scan").addEventListener("click", async (e) => {
-  e.target.disabled = true;
+  const btn = e.currentTarget;
+  btn.disabled = true;
   try {
     await api("logs", {
       json: {
@@ -447,7 +538,7 @@ $("#btn-save-scan").addEventListener("click", async (e) => {
   } catch (err) {
     alert(err.message);
   } finally {
-    e.target.disabled = false;
+    btn.disabled = false;
   }
 });
 
