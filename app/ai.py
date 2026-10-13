@@ -3,22 +3,36 @@ import re
 
 import httpx
 
-from .config import AI_API_KEY, AI_BASE_URL, AI_CHAT_MODEL, AI_VISION_MODEL
+from .config import AI_API_KEY, AI_BASE_URL, AI_CHAT_MODEL, AI_CHAT_REASONING, AI_VISION_MODEL
 
 
 class AIError(Exception):
     pass
 
 
-async def chat_completion(model: str, messages: list[dict], temperature: float = 0.3) -> str:
+def _payload(model: str, messages: list[dict], temperature: float, reasoning: str, stream: bool) -> dict:
+    body = {"model": model, "messages": messages, "temperature": temperature, "stream": stream}
+    if reasoning:
+        body["reasoning_effort"] = reasoning
+    return body
+
+
+async def chat_completion(model: str, messages: list[dict], temperature: float = 0.3, reasoning: str = "") -> str:
     if not AI_BASE_URL or not model:
         raise AIError("AI_BASE_URL / model belum diisi di .env")
     async with httpx.AsyncClient(timeout=90) as client:
         resp = await client.post(
             f"{AI_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {AI_API_KEY}"},
-            json={"model": model, "messages": messages, "temperature": temperature, "stream": False},
+            json=_payload(model, messages, temperature, reasoning, False),
         )
+        if resp.status_code == 400 and reasoning:
+            # Model/router tidak mengenal reasoning_effort: ulangi tanpa
+            resp = await client.post(
+                f"{AI_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {AI_API_KEY}"},
+                json=_payload(model, messages, temperature, "", False),
+            )
     if resp.status_code != 200:
         raise AIError(f"API AI error {resp.status_code}: {resp.text[:300]}")
     text = resp.text
@@ -29,6 +43,58 @@ async def chat_completion(model: str, messages: list[dict], temperature: float =
         return resp.json()["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, ValueError) as e:
         raise AIError(f"Respons AI tidak terduga: {text[:300]}") from e
+
+
+async def stream_completion(model: str, messages: list[dict], temperature: float = 0.3, reasoning: str = ""):
+    """Generator teks potongan demi potongan (streaming) dari API AI."""
+    if not AI_BASE_URL or not model:
+        raise AIError("AI_BASE_URL / model belum diisi di .env")
+    async with httpx.AsyncClient(timeout=httpx.Timeout(90, read=60)) as client:
+        for attempt_reasoning in ([reasoning, ""] if reasoning else [""]):
+            async with client.stream(
+                "POST",
+                f"{AI_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {AI_API_KEY}"},
+                json=_payload(model, messages, temperature, attempt_reasoning, True),
+            ) as resp:
+                if resp.status_code == 400 and attempt_reasoning:
+                    continue  # ulangi tanpa reasoning_effort
+                if resp.status_code != 200:
+                    raise AIError(f"API AI error {resp.status_code}: {(await resp.aread()).decode(errors='ignore')[:300]}")
+                if "text/event-stream" not in resp.headers.get("content-type", "") :
+                    body = (await resp.aread()).decode(errors="ignore")
+                    if body.lstrip().startswith("data:"):
+                        yield _join_sse(body)
+                    else:
+                        try:
+                            yield json.loads(body)["choices"][0]["message"]["content"] or ""
+                        except (KeyError, IndexError, ValueError) as e:
+                            raise AIError(f"Respons AI tidak terduga: {body[:300]}") from e
+                    return
+                async for line in resp.aiter_lines():
+                    piece = _sse_piece(line)
+                    if piece is None:
+                        break
+                    if piece:
+                        yield piece
+                return
+
+
+def _sse_piece(line: str) -> str | None:
+    """Isi teks dari satu baris SSE. None = stream selesai."""
+    line = line.strip()
+    if not line.startswith("data:"):
+        return ""
+    payload = line[5:].strip()
+    if payload == "[DONE]":
+        return None
+    try:
+        chunk = json.loads(payload)
+    except json.JSONDecodeError:
+        return ""
+    if chunk.get("error"):
+        raise AIError(f"API AI error: {str(chunk['error'])[:300]}")
+    return "".join((c.get("delta") or c.get("message") or {}).get("content") or "" for c in chunk.get("choices", []))
 
 
 def _join_sse(text: str) -> str:
@@ -146,7 +212,7 @@ async def pick_matches(items: list[dict]) -> list[int | None]:
         + "\n".join(lines)
         + '\n\nBalas HANYA JSON: {"picks": [id_atau_null, ...]} sesuai urutan item.'
     )
-    text = await chat_completion(AI_CHAT_MODEL, [{"role": "user", "content": prompt}], temperature=0)
+    text = await chat_completion(AI_CHAT_MODEL, [{"role": "user", "content": prompt}], temperature=0, reasoning=AI_CHAT_REASONING)
     picks = extract_json(text).get("picks", [])
     out = []
     for i, it in enumerate(items):
@@ -156,10 +222,11 @@ async def pick_matches(items: list[dict]) -> list[int | None]:
     return out
 
 
-async def coach_reply(system_context: str, history: list[dict]) -> str:
+async def coach_stream(system_context: str, history: list[dict]):
     system = (
         "Kamu adalah 'Coach', pendamping diet yang ramah, santai, dan suportif untuk dua orang pasangan. "
-        "Jawab dalam Bahasa Indonesia yang santai dan ringkas. Berikan saran praktis berbasis data di bawah. "
+        "Jawab dalam Bahasa Indonesia yang santai dan ringkas (maksimal ~120 kata kecuali diminta detail). "
+        "Berikan saran praktis berbasis data di bawah. "
         "Jangan memberi diagnosis medis; sarankan ke dokter/ahli gizi bila menyangkut kondisi kesehatan.\n\n"
         + system_context
     )
@@ -168,5 +235,5 @@ async def coach_reply(system_context: str, history: list[dict]) -> str:
         for m in history[-12:]
         if m.get("role") in ("user", "assistant")
     ]
-    text = await chat_completion(AI_CHAT_MODEL, msgs, temperature=0.6)
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    async for piece in stream_completion(AI_CHAT_MODEL, msgs, temperature=0.6, reasoning=AI_CHAT_REASONING):
+        yield piece

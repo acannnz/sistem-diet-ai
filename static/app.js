@@ -526,15 +526,40 @@ $("#chat-form").addEventListener("submit", async (e) => {
   state.chat.push({ role: "user", content: text });
   $("#chat-chips").classList.add("hidden");
   const pending = addBubble("assistant typing", "•••");
+  const sendBtn = $(".send-btn");
+  sendBtn.disabled = true;
   try {
-    const { reply } = await api("chat", { json: { messages: state.chat } });
-    pending.classList.remove("typing");
+    const res = await fetch("api/chat", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: state.chat }),
+    });
+    if (res.status === 401) { showLogin(); throw new Error("Belum login"); }
+    if (!res.ok) throw new Error("Terjadi kesalahan (" + res.status + ")");
+    // Tampilkan jawaban sepotong demi sepotong selagi AI mengetik
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let reply = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      reply += decoder.decode(value, { stream: true });
+      if (reply.trim()) {
+        pending.classList.remove("typing");
+        pending.textContent = reply;
+        pending.scrollIntoView({ block: "end" });
+      }
+    }
+    reply = reply.trim();
+    if (!reply) throw new Error("Coach tidak membalas, coba lagi.");
     pending.textContent = reply;
     state.chat.push({ role: "assistant", content: reply });
   } catch (err) {
     pending.classList.remove("typing");
     pending.textContent = "⚠️ " + err.message;
     state.chat.pop();
+  } finally {
+    sendBtn.disabled = false;
   }
 });
 

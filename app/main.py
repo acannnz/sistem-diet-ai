@@ -4,8 +4,9 @@ import secrets
 import time
 from datetime import date as date_cls, datetime, timedelta
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -354,8 +355,18 @@ async def chat(body: ChatIn, user=Depends(current_user)):
         "Makanan hari ini: " + ("; ".join(f"{r['meal']}: {r['name']} {r['grams']:.0f}g ({r['kcal']:.0f} kkal)" for r in logs) or "belum ada"),
         "Kalori 7 hari terakhir: " + (", ".join(f"{r['date']}={r['kcal']:.0f}" for r in week) or "belum ada data"),
     ]
-    reply = await ai.coach_reply("DATA USER:\n" + "\n".join(ctx), body.messages)
-    return {"reply": reply}
+    async def gen():
+        try:
+            async for piece in ai.coach_stream("DATA USER:\n" + "\n".join(ctx), body.messages):
+                yield piece
+        except (ai.AIError, httpx.HTTPError) as e:
+            yield f"\n\n⚠️ {e}"
+
+    # Jawaban dikirim sepotong-sepotong; X-Accel-Buffering mencegah Nginx menahan stream
+    return StreamingResponse(
+        gen(), media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------- Frontend (PWA) ----------

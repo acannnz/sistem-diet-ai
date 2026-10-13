@@ -11,6 +11,9 @@ AI_BASE_URL = os.getenv("AI_BASE_URL", "").rstrip("/")
 AI_API_KEY = os.getenv("AI_API_KEY", "")
 AI_VISION_MODEL = os.getenv("AI_VISION_MODEL", "")
 AI_CHAT_MODEL = os.getenv("AI_CHAT_MODEL", AI_VISION_MODEL)
+# Mode "berpikir" model untuk chat & pemilihan TKPI: none | low | medium | high, kosongkan = default model.
+# "none" membuat jawaban jauh lebih cepat (coach tidak butuh penalaran panjang).
+AI_CHAT_REASONING = os.getenv("AI_CHAT_REASONING", "none").strip()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-ganti-ini")
 # true di server (HTTPS) supaya cookie login hanya dikirim lewat koneksi aman

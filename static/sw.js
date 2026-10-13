@@ -1,5 +1,5 @@
 // Service worker: cache tampilan aplikasi supaya cepat dibuka. Data (api/) selalu diambil dari server.
-const CACHE = "diet-scan-v3";
+const CACHE = "diet-scan-v4";
 const ASSETS = ["./", "index.html", "style.css", "app.js", "manifest.webmanifest", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
