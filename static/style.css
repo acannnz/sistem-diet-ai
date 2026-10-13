@@ -258,7 +258,20 @@ label input, label select { margin-top: 6px; }
 }
 .hint-label { margin-top: 18px; }
 .preview-wrap { position: relative; border-radius: var(--radius); overflow: hidden; margin-bottom: 14px; box-shadow: var(--shadow); }
-#scan-preview { width: 100%; max-height: 280px; object-fit: cover; display: block; }
+#scan-preview {
+  width: 100%; max-height: 320px; object-fit: contain; display: block; background: var(--card-2); cursor: pointer;
+  transition: opacity .18s ease, transform .35s cubic-bezier(.2, .8, .2, 1);
+}
+#scan-preview.swap { opacity: 0; transform: scale(.96); }
+.crop-badge {
+  position: absolute; left: 10px; top: 10px; padding: 5px 10px; border-radius: 99px; font-size: 11.5px; font-weight: 700;
+  background: rgba(3, 49, 84, .65); color: #fff; backdrop-filter: blur(6px); pointer-events: none;
+}
+.scan-item .thumb {
+  width: 54px; height: 54px; border-radius: 14px; object-fit: cover; flex-shrink: 0;
+  border: 2px solid var(--sky-soft); background: var(--card-2);
+}
+.scan-item .head { align-items: center; }
 .scan-overlay {
   position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding: 16px;
   background: linear-gradient(transparent 40%, rgba(3, 49, 84, .7)); color: #fff; font-weight: 700;

@@ -74,12 +74,15 @@ Balas HANYA dengan JSON, tanpa teks lain, dengan format:
       "grams": 150,
       "portion": "deskripsi porsi, mis. '1 piring sedang'",
       "confidence": 0.8,
-      "per100g": {"kcal": 0, "protein": 0, "fat": 0, "carb": 0}
+      "per100g": {"kcal": 0, "protein": 0, "fat": 0, "carb": 0},
+      "box_2d": [120, 250, 680, 760]
     }
   ],
   "note": "catatan singkat bila ada (mis. minyak/santan tersembunyi), boleh kosong"
 }
 "per100g" adalah perkiraanmu untuk nilai gizi per 100 gram (dipakai hanya jika data ahli gizi tidak punya item tsb).
+"box_2d" adalah kotak pembatas item tsb di foto: [ymin, xmin, ymax, xmax], dinormalisasi 0-1000
+(0,0 = pojok kiri atas). Kotak harus memuat seluruh item (untuk minuman: seluruh gelas/botolnya).
 Jika foto bukan makanan/minuman, balas {"items": [], "note": "bukan makanan"}."""
 
 
@@ -97,10 +100,37 @@ async def analyze_food_image(image_data_url: str, hint: str = "") -> dict:
                 "portion": str(it.get("portion", "")),
                 "confidence": float(it.get("confidence") or 0.5),
                 "per100g": {k: float((it.get("per100g") or {}).get(k) or 0) for k in ("kcal", "protein", "fat", "carb")},
+                "box": parse_box(it.get("box_2d") or it.get("box")),
             })
         except (TypeError, ValueError):
             continue
-    return {"items": [i for i in items if i["name"]], "note": data.get("note", "")}
+    items = [i for i in items if i["name"]]
+    return {"items": items, "note": data.get("note", ""), "crop": union_box([i["box"] for i in items])}
+
+
+def parse_box(raw) -> list[float] | None:
+    """[ymin, xmin, ymax, xmax] skala 0-1000 -> [x, y, w, h] skala 0-1, atau None kalau tidak valid."""
+    try:
+        ymin, xmin, ymax, xmax = (min(max(float(v), 0), 1000) / 1000 for v in raw)
+    except (TypeError, ValueError):
+        return None
+    if xmax - xmin < 0.02 or ymax - ymin < 0.02:
+        return None
+    return [round(xmin, 4), round(ymin, 4), round(xmax - xmin, 4), round(ymax - ymin, 4)]
+
+
+def union_box(boxes: list, pad: float = 0.06) -> list[float] | None:
+    """Gabungan semua kotak item + sedikit ruang di tepi. None kalau tidak perlu dipotong."""
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        return None
+    x1 = max(min(b[0] for b in boxes) - pad, 0)
+    y1 = max(min(b[1] for b in boxes) - pad, 0)
+    x2 = min(max(b[0] + b[2] for b in boxes) + pad, 1)
+    y2 = min(max(b[1] + b[3] for b in boxes) + pad, 1)
+    if (x2 - x1) * (y2 - y1) > 0.85:  # makanan sudah memenuhi foto
+        return None
+    return [round(x1, 4), round(y1, 4), round(x2 - x1, 4), round(y2 - y1, 4)]
 
 
 async def pick_matches(items: list[dict]) -> list[int | None]:

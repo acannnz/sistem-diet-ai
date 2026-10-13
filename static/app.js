@@ -265,6 +265,46 @@ function resizeImage(file, max = 1024) {
   });
 }
 
+function loadImage(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Foto tidak bisa dibaca"));
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+// Potong gambar ke kotak [x, y, w, h] (skala 0-1). pad = ruang tambahan di tepi.
+function cropImage(img, box, { pad = 0, max = 1024 } = {}) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const x = Math.max(0, (box[0] - pad) * W), y = Math.max(0, (box[1] - pad) * H);
+  const w = Math.min(W - x, (box[2] + pad * 2) * W), h = Math.min(H - y, (box[3] + pad * 2) * H);
+  const scale = Math.min(1, max / Math.max(w, h));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w * scale);
+  c.height = Math.round(h * scale);
+  c.getContext("2d").drawImage(img, x, y, w, h, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.85);
+}
+
+function setPreview(src, cropped) {
+  const el = $("#scan-preview");
+  el.classList.add("swap");
+  setTimeout(() => {
+    el.src = src;
+    el.onload = () => el.classList.remove("swap");
+    $("#crop-badge").classList.toggle("hidden", !cropped);
+  }, 180);
+}
+
+$("#scan-preview").addEventListener("click", () => {
+  // Ketuk foto untuk bergantian melihat hasil crop / foto asli
+  const s = state.photo;
+  if (!s?.cropped) return;
+  s.showCropped = !s.showCropped;
+  setPreview(s.showCropped ? s.cropped : s.original, s.showCropped);
+});
+
 async function handlePhoto(file) {
   if (!file) return;
   $("#scan-start").classList.add("hidden");
@@ -277,12 +317,22 @@ async function handlePhoto(file) {
   state.scanItems = [];
   try {
     const blob = await resizeImage(file);
-    $("#scan-preview").src = URL.createObjectURL(blob);
+    const img = await loadImage(blob);
+    state.photo = { img, original: img.src, cropped: null, showCropped: false };
+    $("#crop-badge").classList.add("hidden");
+    $("#scan-preview").src = img.src;
     const fd = new FormData();
     fd.append("image", blob, "foto.jpg");
     fd.append("hint", $("#scan-hint").value);
     const data = await api("scan", { method: "POST", body: fd });
     state.scanItems = data.items;
+    // Auto-crop: fokuskan foto ke area makanan/minuman yang terdeteksi
+    if (data.crop) {
+      state.photo.cropped = cropImage(img, data.crop);
+      state.photo.showCropped = true;
+      setPreview(state.photo.cropped, true);
+    }
+    data.items.forEach((it) => { if (it.box) it.thumb = cropImage(img, it.box, { pad: 0.02, max: 160 }); });
     $("#scan-meal").value = data.meal;
     $("#scan-note").textContent = data.note || "";
     if (!data.items.length) $("#scan-error").textContent = "Tidak ada makanan yang terdeteksi. Coba foto ulang atau tambah item manual.";
@@ -322,7 +372,8 @@ function renderScanItems() {
       ? `<option value="ai" ${!it.food_id ? "selected" : ""}>Perkiraan AI: ${esc(it.name)} (${r0(it.per100g.kcal)} kkal/100g)</option>` : "";
     return `<div class="card scan-item" data-i="${i}">
       <div class="head">
-        <div><b>${esc(it.name)}</b><div class="portion">${esc(it.portion || "")}</div></div>
+        ${it.thumb ? `<img class="thumb" src="${it.thumb}" alt="">` : ""}
+        <div style="flex:1;min-width:0"><b>${esc(it.name)}</b><div class="portion">${esc(it.portion || "")}</div></div>
         <div style="display:flex;gap:6px;align-items:center"><span class="kcal" data-kcal></span><button class="remove" data-remove aria-label="Hapus">✕</button></div>
       </div>
       <select data-match>${opts}${aiOpt}</select>
